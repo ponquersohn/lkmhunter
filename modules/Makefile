@@ -1,13 +1,14 @@
 SRC=src
+UNAME := $(shell uname -r)
 
 .PHONY: all
 all:
-	cd $(SRC) && $(MAKE) all
+	cd $(SRC) && $(MAKE) -e UNAME=$(UNAME) all
 
 .PHONY: clean
 clean:
-	cd $(SRC) && $(MAKE) clean
+	cd $(SRC) && $(MAKE) -e UNAME=$(UNAME) clean
 
 .PHONY: test
 test:
-	cd $(SRC) && $(MAKE) test
+	cd $(SRC) && $(MAKE) -e UNAME=$(UNAME) test
