@@ -37,3 +37,13 @@ No way the pid can be hidden from here.
 # Notes
 ## Hunting hidden modules
 There are multiple ways a rootkit module can hide itself from a user. Most (if not all today) rely on hiding the module from lsmod command. 
+
+source: https://www.reddit.com/r/eBPF/comments/vkktxl/how_to_tell_what_createdowns_each_bpf_program/
+Apparently processes that load bpf programs open a file descriptor, so at least you can know what processes have bpf progs loaded:
+
+for i in $(ps ax -o pid); do ls -l /proc/$i/fd|grep "bpf-prog" &>/dev/null ; if [ $? -eq 0 ]; then echo $(cat /proc/$i/cmdline); fi; done
+
+$ ls -l /proc/1/fd | grep bpf
+lrwx------. 1 root root 64 jun 5 06:49 37 -> anon_inode:bpf-prog
+
+
