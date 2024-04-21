@@ -74,7 +74,7 @@ if __name__ == "__main__":
         mountpoint = "/mnt"
     mountpoint = Path(mountpoint)
     logging.info(f"Comparing device: {device} with mount: {mountpoint}")
-    debugfs = initialize_debugfs("/dev/system/root")
+    debugfs = initialize_debugfs(device)
     ret = list(ls_dir(debugfs, ""))
     # print("\n".join(ret))
     all_folders = {}
@@ -83,8 +83,11 @@ if __name__ == "__main__":
         # if not mounted_file.is_file():
         #   print(f"Missing file: {file} under {mountpoint}")
         parent = mounted_file.parent
-        contents = all_folders.get(str(parent), os.listdir(str(parent)))
-        all_folders[str(parent)] = contents
-        if not file.name in contents:
-            print(f"Missing file: {file} under {mountpoint}")
+        try:
+            contents = all_folders.get(str(parent), os.listdir(str(parent)))
+            all_folders[str(parent)] = contents
+            if not file.name in contents:
+                print(f"Missing file: {file} under {mountpoint}")
+        except Exception as e:
+            logging.error(f"Unable to process {file}: {e}")
     print("all done")

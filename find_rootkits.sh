@@ -1,7 +1,8 @@
 #!/bin/bash 
 workdir=/tmp
 echo "The dumbest thing ever. Looking in sys and found:"
-comm -13 <(lsmod |cut -d " " -f1|tail -n +2|sort) <(find /sys/module/ -name holders -exec dirname {} \; |xargs -n 1 basename | sort)
+for module in $(comm -13 <(lsmod |cut -d " " -f1|tail -n +2|sort) <(find /sys/module/ -name holders -exec dirname {} \; |xargs -n 1 basename | sort))
+    echo "Found module in sys: $module"
 echo "Staring prework"
 curl --no-progress-meter https://raw.githubusercontent.com/torvalds/linux/master/scripts/extract-vmlinux > $workdir/extract-vmlinux
 
