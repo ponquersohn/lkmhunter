@@ -1,5 +1,10 @@
+import logging
 from io import BufferedReader
 
+logger = logging.getLogger("SyscallTable")
+
+# x86-64 syscall table entries are 8-byte function pointers.
+SYSCALL_ENTRY_SIZE = 8
 
 syscall_enum = {
     0: ("read", "sys_read", "fs/read_write.c"),
@@ -349,10 +354,16 @@ class Syscall:
         self.number = number
         self.offset = offset
         self.entry_point = entry_point
-        if len(syscall_enum[number]) == 3:
-            self.name, self.entry_point_name, self.implementation = syscall_enum[number]
+        # syscall_enum only covers the classic numbers; anything beyond it (newer
+        # syscalls) still gets compared by number, just with a synthetic name.
+        info = syscall_enum.get(number)
+        if info is None:
+            self.name = self.entry_point_name = f"__NR_{number}"
+            self.implementation = "unknown"
+        elif len(info) == 3:
+            self.name, self.entry_point_name, self.implementation = info
         else:
-            self.name, self.implementation = syscall_enum[number]
+            self.name, self.implementation = info
             self.entry_point_name = self.name
 
     def __str__(self):
@@ -368,6 +379,10 @@ class SyscallTable:
         if not length:
             length = len(syscall_enum)
         self.length = length
+        logger.debug(
+            "SyscallTable @ virt=%#x file_off=%#x length=%d offset=%#x",
+            address.address, address.physical_address, length, offset,
+        )
 
     def iterate(self, relocate=True):
         for x in range(0, self.length):
@@ -379,14 +394,23 @@ class SyscallTable:
             print(syscall)
 
     def get_syscall(self, syscall_number, relocate=True):
-        if syscall_number > self.length:
+        if syscall_number >= self.length:
             raise Exception("syscall out of range for this table.")
-        syscall_address = self.address.physical_address + 8 * syscall_number
+        syscall_address = self.address.physical_address + SYSCALL_ENTRY_SIZE * syscall_number
         self.image.seek(syscall_address)
+        # Entries are full 8-byte pointers. Reading only 4 bytes happens to work
+        # when the relocation offset is 0 (nokaslr) but corrupts relocation under
+        # KASLR, where the high 32 bits carry the randomized base.
+        entry_point = int.from_bytes(self.image.read(SYSCALL_ENTRY_SIZE), "little")
         syscall = Syscall(
             syscall_number,
             address=syscall_address,
-            entry_point=int.from_bytes(self.image.read(4), "little"),
+            entry_point=entry_point,
             offset=self.offset,
+        )
+        logger.debug(
+            "  [%3d] file_off=%#x entry=%#x relocated=%#x (%s)",
+            syscall_number, syscall_address, entry_point,
+            syscall.relocated_entry_point, syscall.name,
         )
         return syscall

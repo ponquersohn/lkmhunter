@@ -4,7 +4,7 @@ import re
 import subprocess
 from base_object import BaseObject
 
-from syscalls import SyscallTable
+from syscalls import SyscallTable, syscall_enum
 
 
 class KprocSegment(BaseObject):
@@ -110,6 +110,9 @@ class KernelImage(BaseObject):
             segments[segment.virtual_address] = segment
 
         self.segments = collections.OrderedDict(sorted(segments.items(), reverse=True))
+        self.logger.debug(
+            "loaded %d program headers from %s", len(self.segments), self.image_path
+        )
         return self.segments
 
     def to_physical(self, address):
@@ -126,13 +129,21 @@ class KernelImage(BaseObject):
     def get_symbol(self, name):
         return self.all_symbols[name]
 
-    def load_sys_call_table(self, length=314):
+    def load_sys_call_table(self, length=None):
         """Returns the syscall table.
 
         Args:
-            length(int):    The length of the table.
+            length(int):    The number of entries to read. When omitted it is
+                            derived from the symbol map so the whole live table
+                            is covered, not just the first len(syscall_enum).
         """
         syscall_table_address: Symbol = self.all_symbols["sys_call_table"]
+        if length is None:
+            length = self._syscall_table_length(syscall_table_address)
+        self.logger.debug(
+            "loading sys_call_table @ %#x, length=%d, offset=%#x",
+            syscall_table_address.address, length, self.offset,
+        )
         sys_call_table = SyscallTable(
             open(self.image_path, "rb"),
             syscall_table_address,
@@ -142,6 +153,29 @@ class KernelImage(BaseObject):
         self.sys_call_table = sys_call_table
 
         return sys_call_table
+
+    def _syscall_table_length(self, sct: Symbol):
+        """Derive the entry count from the gap to the next symbol in the map.
+
+        The old hard-coded 314 (== len(syscall_enum)) silently ignored every
+        syscall added since ~2013, so hooks on higher numbers went unseen.
+        """
+        higher = [s.address for s in self.all_symbols.values() if s.address > sct.address]
+        if not higher:
+            self.logger.debug("no symbol after sys_call_table; using enum length")
+            return len(syscall_enum)
+        nxt = min(higher)
+        count = (nxt - sct.address) // 8
+        if 300 <= count <= 1024:
+            self.logger.debug(
+                "derived syscall table length=%d (next symbol @ %#x)", count, nxt
+            )
+            return count
+        self.logger.debug(
+            "derived length %d implausible (next sym @ %#x); falling back to enum length %d",
+            count, nxt, len(syscall_enum),
+        )
+        return len(syscall_enum)
 
     def calculate_offset(self, kernel_image: "KernelImage"):
         """Helper function used to calculate the offset.
@@ -157,7 +191,11 @@ class KernelImage(BaseObject):
         self.offset = this_address.address - other_address.address
         physical_offset = this_address.physical_address - other_address.physical_address
 
-        self.logger.debug(f"offset: {self.offset:x}")
+        self.logger.debug(
+            "calculate_offset on %s: this=%#x other=%#x -> offset=%#x (phys_offset=%#x)",
+            symbol_to_compare, this_address.address, other_address.address,
+            self.offset, physical_offset,
+        )
 
     def relocate(self, address):
         """Helper function used to relocate the address by provided offset.
@@ -183,16 +221,49 @@ class KernelImage(BaseObject):
                 )
                 # self.logger.debug(f"Loaded symbol: {symbol}")
                 self.all_symbols[symbol_name] = symbol
+        self.logger.debug(
+            "loaded %d symbols from %s", len(self.all_symbols), self.all_syms_path
+        )
+        if "sys_call_table" not in self.all_symbols:
+            self.logger.warning(
+                "sys_call_table not present in %s — are pointers restricted "
+                "(kptr_restrict) or is this the wrong map?",
+                self.all_syms_path,
+            )
 
     def compare_syscall_table(self, other: "KernelImage"):
         diff = []
+        count = 0
+        # The two tables derive their lengths independently (kallsyms vs
+        # System.map); only compare numbers present in both.
+        limit = min(self.sys_call_table.length, other.sys_call_table.length)
+        if self.sys_call_table.length != other.sys_call_table.length:
+            self.logger.debug(
+                "table lengths differ (live=%d on-disk=%d); comparing first %d",
+                self.sys_call_table.length, other.sys_call_table.length, limit,
+            )
         for my_syscall in self.sys_call_table.iterate():
+            if my_syscall.number >= limit:
+                break
             other_syscall = other.sys_call_table.get_syscall(my_syscall.number)
-            self.logger.debug(my_syscall)
-            self.logger.debug(other_syscall)
+            count += 1
             if my_syscall.relocated_entry_point != other_syscall.relocated_entry_point:
-                self.logger.info(f"Syscall {my_syscall.name} seems hooked.")
+                self.logger.info(
+                    "Syscall %s (#%d) seems hooked: live=%#x on-disk=%#x",
+                    my_syscall.name, my_syscall.number,
+                    my_syscall.relocated_entry_point,
+                    other_syscall.relocated_entry_point,
+                )
                 diff.append((my_syscall, other_syscall))
+            else:
+                self.logger.debug(
+                    "Syscall %s (#%d) ok: %#x",
+                    my_syscall.name, my_syscall.number,
+                    my_syscall.relocated_entry_point,
+                )
+        self.logger.info(
+            "Compared %d syscalls: %d hooked, %d clean", count, len(diff), count - len(diff)
+        )
         return diff
 
 

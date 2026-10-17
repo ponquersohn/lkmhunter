@@ -1,5 +1,5 @@
-obj-m +=  modlist.o pidlist.o 
- 
+obj-m +=  modlist.o pidlist.o lkm_mem.o
+
 MODULE_SRC=.
 EXTRA_CFLAGS += -I$(MODULE_SRC)
 
