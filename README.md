@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="assets/lkmhunter_header.png"
+       alt="LKMHunter - Linux Kernel Rootkit Research"
+       width="100%">
+</p>
+
 # LKMHunter - a set of tools to hunt for kernel modules
 The purpose is to gather together tools and techniques to hunt for LKMs.
 
