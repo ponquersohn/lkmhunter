@@ -1,0 +1,10 @@
+# Everything heavy or generated lives here and should never be committed.
+images/
+symbols/
+rootkits/src/
+id_testbed
+id_testbed.pub
+*.img
+*.qcow2
+*.log
+console.log
