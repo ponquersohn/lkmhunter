@@ -12,8 +12,8 @@
  * on named kernel functions, which means they can only intercept actual
  * calls to those functions -- not inline memory loads.
  *
- * The hot path here is therefore just a volatile byte-pointer dereference
- * in a loop. No calls to copy_from_kernel_nofault, no readelf-of-/proc/kcore,
+ * The read hot path uses inline exception-protected byte loads. No calls to
+ * copy_from_kernel_nofault, no readelf-of-/proc/kcore,
  * no walk through anything on Singularity's hook list. The dentry name is
  * `mem` under `/proc/lkm/`, which is not in Singularity's string filter.
  *
@@ -24,14 +24,15 @@
  * Usage:
  *   insmod lkm_mem.ko
  *   # from Python:
- *   with open("/proc/lkm/mem", "rb") as f:
- *       f.seek(0xffffffffc0c12170)
- *       print(f.read(0x40).hex())
+ *   from lkmhunter.memory import LkmMemory
+ *   with LkmMemory() as memory:
+ *       print(memory.read(0xffffffffc0c12170, 0x40).hex())
  *
  * Writes to read-only kernel pages are made possible by temporarily
  * clearing CR0.WP around each chunk. This is a testbed tool: it can oops
- * the kernel on an invalid address and lets you corrupt arbitrary kernel
- * memory as root. Only load inside the disposable VM.
+ * the kernel on an invalid write address and lets you corrupt arbitrary
+ * kernel memory as root. Reads return EFAULT for unmapped addresses.
+ * Only load inside the disposable VM.
  */
 
 #include <linux/module.h>
@@ -64,12 +65,14 @@ struct lkm_mem_xfer {
 #define LKM_IOC_MAGIC  'L'
 #define LKM_IOC_READ   _IOW(LKM_IOC_MAGIC, 1, struct lkm_mem_xfer)
 #define LKM_IOC_WRITE  _IOW(LKM_IOC_MAGIC, 2, struct lkm_mem_xfer)
+#define LKM_IOC_CAPS   _IO(LKM_IOC_MAGIC, 3)
+#define LKM_CAP_FAULT_SAFE_READ 1
 
 static struct proc_dir_entry *lkm_dir;
 static struct proc_dir_entry *lkm_mem_entry;
 
 /* Basic sanity for kernel-space addresses. Not a correctness guarantee --
- * callers can still oops us with a validly-shaped but unmapped address.
+ * writes can still oops us with a validly-shaped but unmapped address.
  * See the SAFETY note above. */
 static bool addr_range_sane(unsigned long addr, size_t len)
 {
@@ -122,9 +125,13 @@ static ssize_t do_raw_read(unsigned long src, void __user *to, size_t len)
 		size_t chunk = min(remaining, (size_t)LKM_CHUNK);
 		size_t i;
 
-		/* Direct volatile load. No function call, nothing to ftrace. */
+		/* Inline architecture loads with exception-table fixups. Do not use
+		 * get_kernel_nofault(): that macro calls the hookable copy helper. */
+		pagefault_disable();
 		for (i = 0; i < chunk; i++)
-			buf[i] = *((volatile u8 *)(src + total + i));
+			__get_kernel_nofault(&buf[i], (const u8 *)(src + total + i),
+					    u8, read_fault);
+		pagefault_enable();
 
 		if (copy_to_user((char __user *)to + total, buf, chunk))
 			return total ? (ssize_t)total : -EFAULT;
@@ -133,6 +140,10 @@ static ssize_t do_raw_read(unsigned long src, void __user *to, size_t len)
 		remaining -= chunk;
 	}
 	return (ssize_t)total;
+
+read_fault:
+	pagefault_enable();
+	return total ? (ssize_t)total : -EFAULT;
 }
 
 static ssize_t do_raw_write(unsigned long dst, const void __user *from, size_t len)
@@ -189,6 +200,9 @@ static long lkm_mem_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
 	struct lkm_mem_xfer x;
 	ssize_t n;
+
+	if (cmd == LKM_IOC_CAPS)
+		return LKM_CAP_FAULT_SAFE_READ;
 
 	if (copy_from_user(&x, (void __user *)arg, sizeof(x)))
 		return -EFAULT;

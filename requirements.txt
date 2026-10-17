@@ -1,1 +1,2 @@
-pytest
+pyelftools>=0.31
+pytest>=8

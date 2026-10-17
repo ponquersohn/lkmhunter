@@ -100,7 +100,10 @@ packages:
   - build-essential
   - python3
   - python3-pip
-  - binutils            # readelf, used by kernel.py
+  - python3-pyelftools   # shared lkmhunter library
+  - python3-pytest       # opt-in integration tests
+  - bpftool             # automatic BTF layout discovery
+  - binutils            # objdump and kernel build diagnostics
   - e2fsprogs           # debugfs, used by debugfs_hunt.py
   - curl
   - gdb

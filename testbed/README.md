@@ -184,3 +184,39 @@ otherwise logs go to stderr. Normal runs log progress every 100 directories.
 The scanner reports missing directory entries as well as files, compares while
 walking, and exits with an error if a directory cannot be scanned. Because the
 filesystem is live, concurrent file changes can also produce discrepancies.
+
+## Shared kernel hunting library
+
+Install the package in the guest's Python environment before using the wrapper
+scripts. New testbed provisioning includes `python3-pyelftools`,
+`python3-pytest`, and `bpftool`; an existing guest can install those packages with
+apt. See the repository README for virtual-environment installation instead.
+
+```bash
+./ssh.sh 'cd /opt/lkmhunter && python3 -m lkmhunter scan syscalls --json'
+./ssh.sh 'cd /opt/lkmhunter && python3 -m lkmhunter scan ftrace --json'
+./ssh.sh 'cd /opt/lkmhunter && python3 -m pytest -q --live-kernel'
+```
+
+For memory-filter tests, build only the helper against the guest headers:
+
+```bash
+./ssh.sh 'cd /opt/lkmhunter && make -C /lib/modules/$(uname -r)/build M=/opt/lkmhunter/modules/src obj-m=lkm_mem.o modules && insmod modules/src/lkm_mem.ko'
+```
+
+The helper is selected automatically when loaded. Its capability ioctl must
+advertise fault-contained reads before sparse recovery is enabled. The existing
+read/write transfer ABI is unchanged. Rebooting removes the loaded helper.
+
+The explicit integration checks read symbols/layouts, compare syscall pointers,
+parse ftrace observations, verify an invalid helper address returns an error,
+and recover the loaded helper's owning structure. Run ordinary unit tests on a
+clean kernel: rootkit file/read/output filters can tamper with test fixtures.
+
+Validation scenarios are a clean guest, a syscall-table hook, a shared ftrace
+dispatcher, and recovery/dumping when kcore is filtered. Reboot between infected
+and clean runs. The default guest boots with `nokaslr`; also test with that
+parameter removed and verify a nonzero `kaslr_offset` in syscall scan coverage.
+Restore the original boot configuration after that test. Layout extraction uses
+BTF automatically, including when no debug-symbol image is present; syscall
+comparison still requires a matching baseline image.
