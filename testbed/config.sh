@@ -36,8 +36,11 @@ GDB_PORT="${GDB_PORT:-1234}" # QEMU gdb stub (the -s shorthand is :1234)
 VMLINUX="$SYMBOLS_DIR/vmlinux" # symbol file host gdb loads; populated by fetch-symbols.sh
 
 # --- Guest-side account ------------------------------------------------------
-GUEST_USER="${GUEST_USER:-hunter}"
-GUEST_PASS="${GUEST_PASS:-hunter}"         # console login; ssh uses the key below
+# Run the testbed as root by default: the hunter needs to read /proc/kcore and
+# the 0600 /boot/vmlinuz, so root avoids a maze of sudo/permission issues.
+# Override with GUEST_USER=hunter to test the realistic non-root + sudo path.
+GUEST_USER="${GUEST_USER:-root}"
+GUEST_PASS="${GUEST_PASS:-hunter}"         # console login for the hunter user; ssh uses the key below
 SSH_KEY="$TESTBED_DIR/id_testbed"          # auto-generated keypair (gitignored)
 MOUNT_TAG="lkmhunter"                       # 9p tag; repo mounts at /opt/lkmhunter in guest
 GUEST_REPO="/opt/lkmhunter"

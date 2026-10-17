@@ -152,3 +152,35 @@ The rootkit sources are public, well-known detector-test payloads. They are only
 ever compiled and loaded inside this disposable VM, which has no access to your
 host beyond the shared repo directory. Never build or load them on a machine you
 care about.
+
+## Detecting files hidden by Singularity
+
+The debugfs hunter can bypass this checkout's Singularity output filter:
+
+```bash
+./ssh.sh 'python3 /opt/lkmhunter/debugfs_hunt.py /dev/vda1 / --directory /root --bypass-output-filter'
+```
+
+The device must be the ext4 filesystem backing the mountpoint. `--directory`
+selects a path inside that filesystem; omit it to scan from `/`. A 9p share
+such as `/opt/lkmhunter` is not part of the ext4 scan.
+
+The optional bypass requires root, Linux x86_64, `cc`, and permission to trace a
+child with ptrace. It compiles `utils/debugfs_output.c` in a temporary directory,
+then runs debugfs read-only. The helper routes debugfs stdout writes through a
+writable fd 0, which this rootkit's write hook skips. The Python report uses the
+same exclusion so matching paths survive piped SSH output. The temporary build
+is removed afterward. This is specific to the inspected rootkit implementation;
+it does not make an infected kernel trustworthy.
+
+Without `--bypass-output-filter`, ordinary debugfs output collection is used.
+Add `--debug` (or `-v`) for per-directory disk/VFS counts, pending work,
+subprocess commands, elapsed times, captured stderr, and error tracebacks.
+The bypass helper also reports its child PID, exit status, and number of
+redirected writes. In bypass mode, diagnostics use the protected output path
+alongside findings so matching names survive the rootkit's pipe filter;
+otherwise logs go to stderr. Normal runs log progress every 100 directories.
+
+The scanner reports missing directory entries as well as files, compares while
+walking, and exits with an error if a directory cannot be scanned. Because the
+filesystem is live, concurrent file changes can also produce discrepancies.

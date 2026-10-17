@@ -10,7 +10,11 @@ __pycache__
 **/*.mod.c
 **/*.mod.o.d
 **/modules.order
+**/.modlist.o.d
 
 work
 .vscode
 .venv
+
+dumps/
+scratchpad/
