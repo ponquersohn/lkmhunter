@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from elftools.elf.elffile import ELFFile
 
-from .errors import MemoryReadError, MetadataError
+from .errors import HunterError, MemoryReadError, MetadataError
 
 MAX_ADDRESS = 1 << 64
 
@@ -119,3 +119,30 @@ class LkmMemory:
 
     def __exit__(self, *exc):
         self.close()
+
+
+class LkmWriter(LkmMemory):
+    """Explicit raw write access; scanners and GDB use LkmMemory instead."""
+
+    WRITE = (1 << 30) | (24 << 16) | (ord('L') << 8) | 2
+
+    def __init__(self, path='/proc/lkm/mem'):
+        self.path = str(path)
+        self.fd = os.open(path, os.O_RDWR)
+
+    def write(self, address, data):
+        validate_read(address, len(data))
+        total = 0
+        while total < len(data):
+            block = data[total:total + 1024 * 1024]
+            buf = (ctypes.c_ubyte * len(block)).from_buffer_copy(block)
+            transfer = bytearray(struct.pack('=QQQ', address + total, len(block), ctypes.addressof(buf)))
+            try:
+                written = fcntl.ioctl(self.fd, self.WRITE, transfer, True)
+            except OSError as exc:
+                raise HunterError(f'write at {address + total:#x} failed after {total} bytes: {exc}') from exc
+            if written != len(block):
+                raise HunterError(f'short write at {address + total:#x}: {written}/{len(block)} bytes; '
+                                  'live memory may already be modified')
+            total += written
+        return total

@@ -21,3 +21,6 @@ dist/
 
 dumps/
 scratchpad/
+
+/testbed/rootkits/*
+!/testbed/rootkits/clone.sh

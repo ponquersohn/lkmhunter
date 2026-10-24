@@ -12,7 +12,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exec sudo bash "$0" "$@"
 fi
 
-# Run from the repo dir so compare_syscalls.py resolves regardless of cwd.
+# Run from the repo dir so the lkmhunter package resolves regardless of cwd.
 cd "$(dirname "$0")" || exit 1
 
 DEBUG=""
@@ -51,9 +51,9 @@ fi
 sh "$extract" "/boot/vmlinuz-$running_kernel" > "$vmlinux_out"
 
 echo "Comparing syscalls"
-python3 compare_syscalls.py $DEBUG \
-    --loaded_kernel_image "$vmlinux_out" \
-    --loaded_kernel_sysmap "/boot/System.map-$running_kernel"
+python3 -m lkmhunter scan syscalls $DEBUG \
+    --vmlinux "$vmlinux_out" \
+    --system-map "/boot/System.map-$running_kernel"
 rc=$?   # 0 = clean, 1 = hooks found
 
 rm -f "$vmlinux_out" 2>/dev/null

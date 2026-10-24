@@ -1,4 +1,5 @@
 import json
+import struct
 from unittest.mock import patch
 
 import pytest
@@ -38,6 +39,45 @@ def test_missing_baseline_is_unavailable(tmp_path):
         result = SyscallScanner().scan(session)
     assert result.status == ScanStatus.UNAVAILABLE
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize('mutation', ['clean', 'redirect', 'opcode', 'unrelated', 'gap', 'no_size'])
+@pytest.mark.parametrize('branch', [b'\xe8', b'\xe9'])
+def test_syscall_dispatcher_checks_instruction_boundaries_and_slide(byte_memory, fake_session, mutation, branch):
+    base, slide = 0xffffffff81000000, 0x200000
+    code, handler = base + 0x1000, base + 0x2000
+    # Immediate data contains e8: it must never be treated as a call opcode.
+    prefix = b'\xb8\xe8\x00\x00\x00'
+    original = prefix + branch + struct.pack('<i', handler - (code + 10)) + b'\xc3'
+    live = bytearray(original)
+    if mutation == 'redirect':
+        live[6:10] = struct.pack('<i', MODULE_START + 0x1000 - (code + slide + 10))
+    elif mutation == 'opcode':
+        live[5:10] = b'\x90' * 5
+    elif mutation == 'unrelated':
+        live[1] = 0xe9
+    symbols = {'sys_call_table': Symbol('sys_call_table', base, 8),
+               'x64_sys_call': Symbol('x64_sys_call', code, 0 if mutation == 'no_size' else len(original)),
+               '__x64_sys_read': Symbol('__x64_sys_read', handler)}
+    regions = {base + slide: (handler + slide).to_bytes(8, 'little')}
+    if mutation != 'gap':
+        regions[code + slide] = live
+    session = fake_session(
+        baseline=byte_memory({base: handler.to_bytes(8, 'little'), code: original}),
+        memory=byte_memory(regions), baseline_symbols=symbols, kaslr_offset=slide,
+        runtime_address=lambda name: symbols[name].address + slide, syscall_count=lambda override: 1)
+    result = SyscallScanner().scan(session)
+    if mutation in ('gap', 'no_size'):
+        assert result.status == ScanStatus.PARTIAL
+    else:
+        assert result.status == ScanStatus.COMPLETE
+        assert result.coverage['dispatcher']['compared'] == 1
+        assert len(result.findings) == (1 if mutation in ('redirect', 'opcode') else 0)
+        if result.findings:
+            finding = result.findings[0]
+            assert finding.kind == 'syscall_dispatch_hook'
+            assert finding.evidence['expected'] == handler + slide
+            assert finding.evidence['actual'] == (MODULE_START + 0x1000 if mutation == 'redirect' else None)
 
 
 def test_ftrace_requires_no_memory_or_baseline(tmp_path):

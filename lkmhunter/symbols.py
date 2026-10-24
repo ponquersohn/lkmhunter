@@ -13,7 +13,7 @@ class Symbol:
     kind: str = ""
 
 
-def read_symbols(path):
+def read_symbols(path, *, include_modules=False):
     symbols = {}
     with open(path) as source:
         for line in source:
@@ -25,9 +25,12 @@ def read_symbols(path):
             except ValueError:
                 continue
             # Module symbols may shadow core names; do not use them as anchors.
+            name = fields[2]
             if len(fields) > 3 and fields[3].startswith("["):
-                continue
-            symbol = Symbol(fields[2], address, kind=fields[1])
+                if not include_modules:
+                    continue
+                name = f"{fields[3].strip('[]')}__{name}"
+            symbol = Symbol(name, address, kind=fields[1])
             if symbol.name not in symbols or not symbols[symbol.name].address:
                 symbols[symbol.name] = symbol
     return symbols

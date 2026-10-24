@@ -7,7 +7,7 @@ name = "lkmhunter"
 version = "0.1.0"
 description = "Kernel module hunting library and companion tools"
 requires-python = ">=3.10"
-dependencies = ["pyelftools>=0.31"]
+dependencies = ["pyelftools>=0.31", "capstone>=5,<6"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

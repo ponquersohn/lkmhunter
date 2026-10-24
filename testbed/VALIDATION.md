@@ -76,3 +76,38 @@ Local artifacts are retained under `scratchpad/kovid-validation-20261017/`:
 ftrace observations, and `module-dump.tar`. These generated artifacts are
 ignored by Git. The secondary snapshot VM was shut down after export, discarding
 its guest changes.
+
+## Diamorphine dispatcher detection
+
+The user loaded their compatible Diamorphine build into the main
+`7.3.0-9-generic` guest. No rootkit source changes or loading were performed
+during this validation. The original syscall-table and ftrace scans completed
+without findings: all 473 table entries matched, and no suspicious ftrace group
+was found. This build redirects calls within `x64_sys_call` instead.
+
+The extended syscall scanner decoded all 9,168 baseline dispatcher bytes and
+checked 370 direct transfers to syscall handlers. It completed with exactly
+three `syscall_dispatch_hook` findings:
+
+| Expected handler | Live destination |
+| --- | --- |
+| `__x64_sys_getdents64` | `0xffffffffc09ee010` |
+| `__x64_sys_kill` | `0xffffffffc09eea90` |
+| `__x64_sys_getdents` | `0xffffffffc09ee3a0` |
+
+Owner recovery for the first destination identified `diamorphine`, state
+`LIVE`, with `hidden_from_module_list=true`. GDB independently showed the same
+three redirected instructions. Kallsyms-only GDB displayed a nearby helper
+symbol for these hidden addresses; that approximate symbol label did not
+establish ownership. Raw module recovery supplied the owner.
+
+The loaded module and guest were left running. Reports and disassembly are in
+the ignored `scratchpad/diamorphine-validation-20261017/` directory.
+
+At the user's subsequent request, the three verified five-byte dispatcher calls
+were restored from the matching, build-ID-verified vmlinux through the helper's
+write ioctl. Original bytes and findings were saved in
+`restoration-backup.json` before writing. Every write passed immediate readback;
+the guest stayed running. A subsequent scan completed with no findings across
+473 table entries and 370 dispatcher transfers (`syscalls-after-restoration.json`).
+This repairs those call sites; it does not establish full rootkit removal.

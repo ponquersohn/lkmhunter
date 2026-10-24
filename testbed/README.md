@@ -9,7 +9,7 @@ in seconds.
 
 `lkmhunter` works by comparing live kernel state against on-disk ground truth:
 
-- `compare_syscalls.py` diffs the **running** syscall table (read from
+- `python3 -m lkmhunter scan syscalls` diffs the **running** syscall table (read from
   `/proc/kcore`, resolved via `/proc/kallsyms`) against the table in the
   **on-disk** `vmlinux` (extracted from `/boot/vmlinuz-*`) using
   `/boot/System.map-*`.
@@ -84,7 +84,7 @@ addresses line up between gdb, `/proc/kallsyms`, and the hunter's analysis. This
 is the ground truth you check the detector's findings against.
 
 To debug the hunter's Python itself, it runs in the guest over the 9p share, so
-you can `./ssh.sh` in and `python3 -m pdb compare_syscalls.py ...` directly.
+you can `./ssh.sh` in and `python3 -m pdb -m lkmhunter scan syscalls ...` directly.
 
 ## How the pieces fit
 

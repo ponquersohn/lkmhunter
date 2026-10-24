@@ -7,6 +7,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+from capstone.x86 import X86_OP_IMM
 from elftools.common.exceptions import ELFError
 
 from .errors import HunterError, MemoryReadError, UnavailableError
@@ -72,7 +74,72 @@ class SyscallScanner(Scanner):
                     result.findings.append(Finding("syscall_hook", f"Syscall {name} (#{number}) differs from baseline",
                                                    {"number": number, "name": name, "actual": actual,
                                                     "expected": relocated, "baseline": original}))
+            self._scan_dispatcher(session, result, offset)
         return self._guard(session, run)
+
+    def _scan_dispatcher(self, session, result, slide):
+        # Alternatives/tracing legitimately patch text. Compare only decoded
+        # baseline call/jump sites that transfer directly to syscall handlers.
+        symbol = session.baseline_symbols.get("x64_sys_call")
+        coverage = {"symbol": "x64_sys_call", "compared": 0}
+        result.coverage["dispatcher"] = coverage
+        if symbol is None:
+            coverage["status"] = "not_present"
+            return
+        coverage["status"] = "incomplete"
+        if not 0 < symbol.size <= 1024 * 1024:
+            result.status = ScanStatus.PARTIAL
+            result.diagnostics.append("Cannot bound x64_sys_call: missing or invalid ELF symbol size")
+            return
+        address = symbol.address + slide
+        if session.runtime_address("x64_sys_call") != address:
+            raise UnavailableError("Runtime x64_sys_call address disagrees with relocation")
+        coverage.update(address=address, size=symbol.size,
+                        method="baseline direct syscall call/jump targets")
+        baseline = session.baseline.read(symbol.address, symbol.size)
+        live = session.memory.read(address, symbol.size)
+        handlers = {s.address: s.name for s in session.baseline_symbols.values()
+                    if s.name.startswith("__x64_sys_") and s.address}
+        decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+        decoder.detail = True
+        decoded = 0
+        for instruction in decoder.disasm(baseline, symbol.address):
+            decoded += instruction.size
+            if (instruction.mnemonic not in ("call", "jmp") or
+                    len(instruction.operands) != 1 or
+                    instruction.operands[0].type != X86_OP_IMM):
+                continue
+            target = instruction.operands[0].imm & ((1 << 64) - 1)
+            if target not in handlers:
+                continue
+            coverage["compared"] += 1
+            start = instruction.address - symbol.address
+            actual_bytes = live[start:start + instruction.size]
+            if actual_bytes == instruction.bytes:
+                continue
+            replacement = next(decoder.disasm(actual_bytes, address + start, count=1), None)
+            actual_target = None
+            if (replacement is not None and replacement.size == instruction.size and
+                    replacement.mnemonic in ("call", "jmp") and
+                    len(replacement.operands) == 1 and replacement.operands[0].type == X86_OP_IMM):
+                actual_target = replacement.operands[0].imm & ((1 << 64) - 1)
+            result.findings.append(Finding(
+                "syscall_dispatch_hook",
+                f"x64_sys_call transfer to {handlers[target]} differs from baseline",
+                {"site": address + start, "offset": start, "name": handlers[target],
+                 "expected": (target + slide) & ((1 << 64) - 1), "actual": actual_target,
+                 "baseline_bytes": instruction.bytes.hex(), "actual_bytes": actual_bytes.hex(),
+                 "actual_instruction": (f"{replacement.mnemonic} {replacement.op_str}"
+                                        if replacement else None)}))
+        coverage["decoded_bytes"] = decoded
+        if decoded != symbol.size:
+            result.status = ScanStatus.PARTIAL
+            result.diagnostics.append("x64_sys_call baseline could not be fully decoded")
+        elif not coverage["compared"]:
+            result.status = ScanStatus.PARTIAL
+            result.diagnostics.append("No direct syscall handler transfers identified in x64_sys_call")
+        else:
+            coverage["status"] = "complete"
 
 
 LINE_RE = re.compile(

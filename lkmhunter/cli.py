@@ -31,14 +31,14 @@ def common(parser):
     def option(*flags, **kwargs):
         parser.add_argument(*flags, default=argparse.SUPPRESS, **kwargs)
     option("--backend", choices=["auto", "kcore", "lkm_mem"])
-    option("--kcore", "--running_kernel_image", dest="kcore")
+    option("--kcore", dest="kcore")
     option("--lkm-mem", dest="lkm_mem")
-    option("--kallsyms", "--running_kernel_sysmap", dest="kallsyms")
-    option("--vmlinux", "--loaded_kernel_image", dest="vmlinux")
-    option("--system-map", "--loaded_kernel_sysmap", dest="system_map")
+    option("--kallsyms", dest="kallsyms")
+    option("--vmlinux", dest="vmlinux")
+    option("--system-map", dest="system_map")
     option("--btf")
     option("--layout", help="Explicit module layout JSON (overrides automatic discovery)")
-    option("--tracefs", "--path", dest="tracefs", help="Tracefs directory or enabled_functions file")
+    option("--tracefs", dest="tracefs", help="Tracefs directory or enabled_functions file")
     option("--kernel-release")
     option("--live-notes", help="Live kernel ELF notes for build ID validation")
     option("--format", choices=["text", "json"])
@@ -50,6 +50,11 @@ def parser():
     root = argparse.ArgumentParser(description="Hunt kernel hooks and recover owning modules")
     common(root)
     commands = root.add_subparsers(dest="command", required=True)
+    copy = commands.add_parser("copy", help="Copy vmlinux bytes to a live address through lkm_mem (raw write)")
+    common(copy)
+    copy.add_argument("address", type=address, help="Live kernel virtual address (hex); source is address minus KASLR slide")
+    copy.add_argument("size", type=size, help="Number of bytes, optionally suffixed K, M, or G")
+    copy.add_argument("--backup", help="Save original bytes and copy metadata to a new private JSON file")
     scan = commands.add_parser("scan")
     common(scan)
     scanners = scan.add_subparsers(dest="technique", required=True)
@@ -72,6 +77,15 @@ def parser():
         command.add_argument("--direction", choices=["both", "back", "forward"], default="both")
         if action == "dump":
             command.add_argument("--out-dir", default="dumps")
+    gdb = commands.add_parser("gdb", help="Inspect live kernel memory with local, read-only GDB")
+    common(gdb)
+    gdb.add_argument("--symbols", choices=["auto", "kallsyms", "vmlinux", "none"], default="auto")
+    gdb.add_argument("--export", help="Write a reusable local session instead of launching GDB")
+    gdb.add_argument("--gdb-binary", default="gdb")
+    gdb.add_argument("--command", dest="gdb_commands", action="append", default=[], help="GDB command to run after connecting (repeatable)")
+    gdb.add_argument("--batch", action="store_true")
+    server = commands.add_parser("gdb-serve", help="Local stdio adapter used internally by the GDB launcher")
+    common(server)
     return root
 
 
@@ -96,6 +110,36 @@ def main(argv=None):
     session_fields = {"backend", "kcore", "lkm_mem", "kallsyms", "vmlinux", "system_map",
                       "btf", "layout", "tracefs", "kernel_release", "live_notes"}
     kwargs = {key: value for key, value in vars(args).items() if key in session_fields}
+    if args.command == "copy":
+        from .copy import copy_from_vmlinux
+        try:
+            if kwargs.get('backend', 'auto') == 'kcore':
+                raise ValueError('copy writes through lkm_mem; --backend kcore is not supported')
+            kwargs['backend'] = 'lkm_mem'
+            with KernelSession.open(**kwargs) as session:
+                report = copy_from_vmlinux(session, args.address, args.size, backup=args.backup)
+            if getattr(args, 'format', 'text') == 'json':
+                print(json.dumps(report, indent=2))
+            else:
+                print(f"Copied {report['size']} bytes from vmlinux {report['source_address']:#x} "
+                      f"to live {report['address']:#x}; readback verified")
+            return 0
+        except (HunterError, OSError, ValueError) as exc:
+            print(f'Copy failed: {exc}', file=sys.stderr)
+            return 2
+    if args.command in ("gdb", "gdb-serve"):
+        from .gdb_bridge import launch_gdb, serve_session
+        try:
+            with KernelSession.open(**kwargs) as session:
+                if args.command == "gdb-serve":
+                    serve_session(session)
+                    return 0
+                return launch_gdb(session, mode=args.symbols,
+                                  export=args.export, binary=args.gdb_binary,
+                                  commands=args.gdb_commands, batch=args.batch)
+        except (HunterError, OSError, ValueError) as exc:
+            print(f"GDB inspection failed: {exc}", file=sys.stderr)
+            return 2
     technique = getattr(args, "technique", "module")
     try:
         with KernelSession.open(**kwargs) as session:
