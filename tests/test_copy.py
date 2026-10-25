@@ -35,12 +35,12 @@ def test_copy_uses_relocated_source_exact_length_and_durable_backup(copy_fixture
     assert backup.stat().st_mode & 0o777 == 0o600
 
 
-def test_copy_unmapped_source_never_opens_writer(copy_fixture):
+def test_copy_unmapped_source_never_writes(copy_fixture):
     session, address = copy_fixture
     with patch('lkmhunter.copy.LkmWriter') as writer:
         with pytest.raises(MemoryReadError):
             copy_from_vmlinux(session, address, 4)
-        writer.assert_not_called()
+        writer.return_value.__enter__.return_value.write.assert_not_called()
 
 
 def test_copy_existing_backup_prevents_write(copy_fixture, tmp_path):
@@ -78,3 +78,23 @@ def test_copy_cli_and_json(copy_fixture, capsys):
         copy.assert_called_once_with(session, address, 2, backup=None)
     assert json.loads(capsys.readouterr().out)['verified']
     assert main(['copy', hex(address), '2', '--backend', 'kcore']) == 2
+
+
+def test_copy_missing_helper_fails_before_loading_baseline(copy_fixture):
+    session, address = copy_fixture
+    with patch('lkmhunter.copy.LkmWriter', side_effect=FileNotFoundError('/helper')):
+        with pytest.raises(HunterError, match='Load the lkm_mem helper module first'):
+            copy_from_vmlinux(session, address, 2)
+    assert session.baseline.reads == []
+
+
+def test_copy_unavailable_writer_does_not_resolve_lazy_symbols():
+    from unittest.mock import Mock, PropertyMock
+    session = Mock(lkm_mem_path='/missing-helper')
+    with patch.object(type(session), 'kaslr_offset', new_callable=PropertyMock,
+                      create=True) as slide, patch('lkmhunter.copy.LkmWriter',
+                                                   side_effect=PermissionError('/missing-helper')):
+        with pytest.raises(PermissionError):
+            copy_from_vmlinux(session, 0xffffffff81000000, 5)
+        slide.assert_not_called()
+    session.require_platform.assert_called_once_with()
